@@ -49,15 +49,17 @@ const subirPropiedad = async (req, res) => {
   
   const listarPropiedades = async (req, res) => {
     try {
-      const {
-        tipo,
-        operacion,
-        zona,
-        page = 1,
-        limit = 10,
-        precioMin,
-        precioMax,
-      } = req.query;
+        const {
+            tipo,
+            operacion,
+            zona,
+            page = 1,
+            limit = 10,
+            precioMin,
+            precioMax,
+            ordenPrecio, 
+          } = req.query;
+          
   
       const offset = (page - 1) * limit;
       const where = {};
@@ -86,11 +88,21 @@ const subirPropiedad = async (req, res) => {
         where.zona = { [Op.iLike]: zona };
       }
   
+      const order = [];
+
+if (ordenPrecio === 'asc') {
+  order.push(['precio', 'ASC']);
+} else if (ordenPrecio === 'desc') {
+  order.push(['precio', 'DESC']);
+}
+
+
       // Buscar propiedades con paginación
       const { count, rows } = await Propiedad.findAndCountAll({
         where,
         limit,
         offset,
+        order,
       });
   
       // Formatear cada propiedad con imagen destacada
