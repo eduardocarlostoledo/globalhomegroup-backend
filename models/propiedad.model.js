@@ -9,7 +9,20 @@ const Propiedad = sequelize.define('Propiedad', {
     allowNull: false,
     defaultValue: 'VENTA'
   },
-  zona: { type: DataTypes.STRING, allowNull: false },
+  // models/Propiedad.js
+zona_provincia: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+  zona_municipio: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+  zona_localidad: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+  
   descripcion: { type: DataTypes.TEXT },
   precio: { type: DataTypes.INTEGER },
 

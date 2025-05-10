@@ -25,12 +25,14 @@ const subirPropiedad = async (req, res) => {
         titulo: req.body.titulo,
         tipo: req.body.tipo,
         operacion: req.body.operacion,
-        zona: req.body.zona,
+        zona_provincia: req.body.zona_provincia,
+        zona_municipio: req.body.zona_municipio,
+        zona_localidad: req.body.zona_localidad,
         descripcion: req.body.descripcion,
         precio: req.body.precio,
-        imagenes: urls,
-        public_ids: public_ids,
+        // imagenes: manejar aparte
       });
+      
   
       // Eliminar archivos temporales
       req.files.forEach((file) => {
@@ -49,17 +51,18 @@ const subirPropiedad = async (req, res) => {
   
   const listarPropiedades = async (req, res) => {
     try {
-        const {
-            tipo,
-            operacion,
-            zona,
-            page = 1,
-            limit = 10,
-            precioMin,
-            precioMax,
-            ordenPrecio, 
-          } = req.query;
-          
+      const {
+        tipo,
+        operacion,
+        zona_provincia,
+        zona_municipio,
+        zona_localidad,
+        page = 1,
+        limit = 10,
+        precioMin,
+        precioMax,
+        ordenPrecio,
+      } = req.query;
   
       const offset = (page - 1) * limit;
       const where = {};
@@ -75,33 +78,39 @@ const subirPropiedad = async (req, res) => {
         where.precio = { [Op.gte]: parseInt(precioMin) };
       }
   
-      // Filtros de tipo, operacion y zona
+      // Filtros de tipo y operación
       if (tipo) {
         where.tipo = { [Op.iLike]: tipo };
       }
   
       if (operacion) {
-        where.operacion = operacion;
+        where.operacion = { [Op.iLike]: operacion };
       }
   
-      if (zona) {
-        where.zona = { [Op.iLike]: zona };
+      // Filtros de zona
+      if (zona_provincia) {
+        where.zona_provincia = { [Op.iLike]: zona_provincia };
+      }
+      if (zona_municipio) {
+        where.zona_municipio = { [Op.iLike]: zona_municipio };
+      }
+      if (zona_localidad) {
+        where.zona_localidad = { [Op.iLike]: zona_localidad };
       }
   
       const order = [];
-
-if (ordenPrecio === 'asc') {
-  order.push(['precio', 'ASC']);
-} else if (ordenPrecio === 'desc') {
-  order.push(['precio', 'DESC']);
-}
-
-
+  
+      if (ordenPrecio === 'asc') {
+        order.push(['precio', 'ASC']);
+      } else if (ordenPrecio === 'desc') {
+        order.push(['precio', 'DESC']);
+      }
+  
       // Buscar propiedades con paginación
       const { count, rows } = await Propiedad.findAndCountAll({
         where,
-        limit,
-        offset,
+        limit: parseInt(limit),
+        offset: parseInt(offset),
         order,
       });
   
@@ -111,7 +120,9 @@ if (ordenPrecio === 'asc') {
         titulo: p.titulo,
         tipo: p.tipo,
         operacion: p.operacion,
-        zona: p.zona,
+        zona_provincia: p.zona_provincia,
+        zona_municipio: p.zona_municipio,
+        zona_localidad: p.zona_localidad,
         descripcion: p.descripcion,
         precio: p.precio,
         imagenDestacada: p.imagenes?.[0] || "",
@@ -120,12 +131,28 @@ if (ordenPrecio === 'asc') {
   
       // Filtros únicos para el frontend
       const todasPropiedades = await Propiedad.findAll({
-        attributes: ["tipo", "operacion", "zona"],
+        attributes: [
+          "tipo",
+          "operacion",
+          "zona_provincia",
+          "zona_municipio",
+          "zona_localidad",
+        ],
       });
   
       const tiposUnicos = [...new Set(todasPropiedades.map((p) => p.tipo))];
-      const zonasUnicas = [...new Set(todasPropiedades.map((p) => p.zona))];
-      const operacionUnicos = [...new Set(todasPropiedades.map((p) => p.operacion))];
+      const operacionUnicos = [
+        ...new Set(todasPropiedades.map((p) => p.operacion)),
+      ];
+  
+      const zonasUnicas = [
+        ...new Set(
+          todasPropiedades.map(
+            (p) =>
+              `${p.zona_provincia || ""} - ${p.zona_municipio || ""} - ${p.zona_localidad || ""}`
+          )
+        ),
+      ];
   
       res.json({
         propiedades: propiedadesFormateadas,
@@ -146,8 +173,7 @@ if (ordenPrecio === 'asc') {
   
   
   
-
-const actualizarPropiedad = async (req, res) => {
+  const actualizarPropiedad = async (req, res) => {
     try {
       const propiedad = await Propiedad.findByPk(req.params.id);
       if (!propiedad) {
@@ -163,30 +189,29 @@ const actualizarPropiedad = async (req, res) => {
           );
           await Promise.all(deletePromises);
         }
-      
+  
         const urls = [];
         const public_ids = [];
-      
+  
         for (const file of req.files) {
           const localPath = file.path;
-      
+  
           if (!fs.existsSync(localPath)) {
             console.error("⚠️ Archivo no encontrado:", localPath);
             continue;
           }
-      
+  
           try {
             const result = await cloudinary.uploader.upload(localPath, {
               folder: "propiedades",
               resource_type: "image",
             });
-      
+  
             urls.push(result.secure_url);
             public_ids.push(result.public_id);
           } catch (uploadError) {
             console.error("⛔ Error al subir imagen:", uploadError);
           } finally {
-            // Borrado seguro
             try {
               if (fs.existsSync(localPath)) {
                 fs.unlinkSync(localPath);
@@ -196,27 +221,36 @@ const actualizarPropiedad = async (req, res) => {
             }
           }
         }
-      
+  
         if (urls.length === 0) {
           return res.status(400).json({
             error: "No se pudieron subir imágenes.",
           });
         }
-      
+  
         propiedad.imagenes = urls;
         propiedad.public_ids = public_ids;
       }
-      
-
   
       // Actualizar otros campos
-      const { titulo, tipo, operacion, zona, descripcion, precio } = req.body;
+      const {
+        titulo,
+        tipo,
+        operacion,
+        zona_provincia,
+        zona_municipio,
+        zona_localidad,
+        descripcion,
+        precio
+      } = req.body;
   
       Object.assign(propiedad, {
         titulo,
         tipo,
         operacion,
-        zona,
+        zona_provincia,
+        zona_municipio,
+        zona_localidad,
         descripcion,
         precio,
       });
@@ -265,10 +299,111 @@ const obtenerPropiedadPorId = async (req, res) => {
   }
 };
 
+
+const listarTodasLasPropiedades = async (req, res) => {
+    try {
+      const propiedades = await Propiedad.findAll({
+        order: [['createdAt', 'DESC']],
+      });
+  
+      const propiedadesFormateadas = propiedades.map((p) => ({
+        id: p.id,
+        titulo: p.titulo,
+        tipo: p.tipo,
+        operacion: p.operacion,
+        zona_provincia: p.zona_provincia,
+        zona_municipio: p.zona_municipio,
+        zona_localidad: p.zona_localidad,
+        descripcion: p.descripcion,
+        precio: p.precio,
+        imagenDestacada: p.imagenes?.[0] || "",
+        imagenes: p.imagenes || [],
+      }));
+  
+      res.json({ propiedades: propiedadesFormateadas });
+    } catch (err) {
+      console.error("Error al listar todas las propiedades:", err);
+      res.status(500).json({ error: "Error interno del servidor" });
+    }
+  };
+
+  const listarTodasLasPropiedadesConFiltros = async (req, res) => {
+    try {
+      const {
+        tipo,
+        operacion,
+        zona_provincia,
+        zona_municipio,
+        zona_localidad,
+        precioMin,
+        precioMax,
+      } = req.query;
+  
+      const where = {};
+  
+      if (tipo) {
+        where.tipo = { [Op.iLike]: tipo };
+      }
+  
+      if (operacion) {
+        where.operacion = { [Op.iLike]: operacion };
+      }
+  
+      if (zona_provincia) {
+        where.zona_provincia = { [Op.iLike]: zona_provincia };
+      }
+  
+      if (zona_municipio) {
+        where.zona_municipio = { [Op.iLike]: zona_municipio };
+      }
+  
+      if (zona_localidad) {
+        where.zona_localidad = { [Op.iLike]: zona_localidad };
+      }
+  
+      if (precioMin && precioMax) {
+        where.precio = {
+          [Op.between]: [parseInt(precioMin), parseInt(precioMax)],
+        };
+      } else if (precioMin) {
+        where.precio = { [Op.gte]: parseInt(precioMin) };
+      } else if (precioMax) {
+        where.precio = { [Op.lte]: parseInt(precioMax) };
+      }
+  
+      const propiedades = await Propiedad.findAll({
+        where,
+        order: [['createdAt', 'DESC']],
+      });
+  
+      const propiedadesFormateadas = propiedades.map((p) => ({
+        id: p.id,
+        titulo: p.titulo,
+        tipo: p.tipo,
+        operacion: p.operacion,
+        zona_provincia: p.zona_provincia,
+        zona_municipio: p.zona_municipio,
+        zona_localidad: p.zona_localidad,
+        descripcion: p.descripcion,
+        precio: p.precio,
+        imagenDestacada: p.imagenes?.[0] || "",
+        imagenes: p.imagenes || [],
+      }));
+  
+      res.json({ propiedades: propiedadesFormateadas });
+    } catch (err) {
+      console.error("Error al filtrar propiedades:", err);
+      res.status(500).json({ error: "Error interno del servidor" });
+    }
+  };
+  
+
 module.exports = {
   subirPropiedad,
   listarPropiedades,
   actualizarPropiedad,
   eliminarPropiedad,
   obtenerPropiedadPorId,
+  listarTodasLasPropiedades,
+  listarTodasLasPropiedadesConFiltros,
 };
