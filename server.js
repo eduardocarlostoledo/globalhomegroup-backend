@@ -3,12 +3,13 @@ const cors = require('cors');
 const sequelize = require('./config/database');
 const propiedadRoutes = require('./routes/propiedades.routes');
 const planesRoutes = require('./routes/planes.routes');
-
+const construccionRoutes = require('./routes/construccion.routes');
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use('/api/propiedades', propiedadRoutes);
 app.use("/api/planes", planesRoutes);
+app.use("/api/construcciones", construccionRoutes);
 
 // Test DB y sincronización Sincronizá el modelo no forzando la tabla 
 // sequelize.sync({ force: false })
