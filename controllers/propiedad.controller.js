@@ -4,49 +4,52 @@ const fs = require("fs");
 const { Op } = require("sequelize");
 
 const subirPropiedad = async (req, res) => {
-    try {
-      // Validación básica
-      if (!req.files || req.files.length === 0) {
-        return res.status(400).json({ error: "Debe enviar al menos una imagen" });
-      }
-  
-      // Subir todas las imágenes a Cloudinary
-      const uploadPromises = req.files.map((file) =>
-        cloudinary.uploader.upload(file.path, { folder: "propiedades" })
-      );
-  
-      const uploadResults = await Promise.all(uploadPromises);
-  
-      const urls = uploadResults.map((r) => r.secure_url);
-      const public_ids = uploadResults.map((r) => r.public_id);
-  
-      // Guardar en base de datos
-      const nuevaPropiedad = await Propiedad.create({
-        titulo: req.body.titulo,
-        tipo: req.body.tipo,
-        operacion: req.body.operacion,
-        zona_provincia: req.body.zona_provincia,
-        zona_municipio: req.body.zona_municipio,
-        zona_localidad: req.body.zona_localidad,
-        descripcion: req.body.descripcion,
-        precio: req.body.precio,
-        // imagenes: manejar aparte
-      });
-      
-  
-      // Eliminar archivos temporales
-      req.files.forEach((file) => {
-        if (fs.existsSync(file.path)) {
-          fs.unlinkSync(file.path);
-        }
-      });
-        
-      res.status(201).json(nuevaPropiedad);
-    } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: err.message });
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: "Debe enviar al menos una imagen." });
     }
-  };
+
+    const camposObligatorios = [
+      "titulo", "tipo", "operacion", "zona_provincia",
+      "zona_municipio", "zona_localidad"
+    ];
+
+    for (const campo of camposObligatorios) {
+      if (!req.body[campo]) {
+        return res.status(400).json({ error: `El campo '${campo}' es obligatorio.` });
+      }
+    }
+
+    const uploadResults = await Promise.all(
+      req.files.map(file => cloudinary.uploader.upload(file.path, { folder: "propiedades" }))
+    );
+
+    const urls = uploadResults.map(r => r.secure_url);
+    const public_ids = uploadResults.map(r => r.public_id);
+
+    const nuevaPropiedad = await Propiedad.create({
+      titulo: req.body.titulo,
+      tipo: req.body.tipo,
+      operacion: req.body.operacion,
+      zona_provincia: req.body.zona_provincia,
+      zona_municipio: req.body.zona_municipio,
+      zona_localidad: req.body.zona_localidad,
+      descripcion: req.body.descripcion,
+      precio: req.body.precio,
+      imagenes: urls,
+      public_ids
+    });
+
+    req.files.forEach(file => {
+      if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+    });
+
+    res.status(201).json(nuevaPropiedad);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al guardar la propiedad. Intente nuevamente." });
+  }
+};
   
   
   const listarPropiedades = async (req, res) => {
