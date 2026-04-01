@@ -12,6 +12,7 @@ const planesRoutes = require("./routes/planes.routes");
 const construccionRoutes = require("./routes/construccion.routes");
 
 const app = express();
+const REQUIRED_ENV_VARS = ["DB_HOST", "DB_USER", "DB_PASSWORD", "DB_NAME", "DB_PORT"];
 
 /* =========================================================
    🔐 SEGURIDAD (SIN ROMPER NADA)
@@ -110,14 +111,24 @@ app.use((err, req, res, next) => {
 ========================================================= */
 
 const PORT = process.env.PORT || 3001;
+const isDevelopment = process.env.NODE_ENV === "development";
+
+const validateRequiredEnv = () => {
+  const missingVars = REQUIRED_ENV_VARS.filter((envVar) => !process.env[envVar]);
+
+  if (missingVars.length > 0) {
+    throw new Error(`Faltan variables de entorno requeridas: ${missingVars.join(", ")}`);
+  }
+};
 
 const startServer = async () => {
   try {
+    validateRequiredEnv();
     await sequelize.authenticate();
     console.log("🟢 DB conectada");
 
     // ⚠️ SOLO en desarrollo
-    if (process.env.NODE_ENV !== "production") {
+    if (isDevelopment) {
       await sequelize.sync({ force: false });
       console.log("🟡 DB sync (dev)");
     }
