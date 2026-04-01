@@ -12,22 +12,23 @@ const planesRoutes = require("./routes/planes.routes");
 const construccionRoutes = require("./routes/construccion.routes");
 
 const app = express();
-const REQUIRED_ENV_VARS = ["DB_HOST", "DB_USER", "DB_PASSWORD", "DB_NAME", "DB_PORT"];
+const PORT = process.env.PORT || 3001;
+const isDevelopment = process.env.NODE_ENV === "development";
+const DB_RETRY_DELAY_MS = Number.parseInt(process.env.DB_RETRY_DELAY_MS || "", 10) || 10000;
+const dbState = {
+  connected: false,
+  connecting: false,
+  lastError: null,
+  lastAttemptAt: null,
+  lastConnectedAt: null,
+};
 
-/* =========================================================
-   🔐 SEGURIDAD (SIN ROMPER NADA)
-========================================================= */
-
-// Helmet SIN CSP (CSP va en frontend)
+// Helmet without CSP because CSP is handled in the frontend.
 app.use(
   helmet({
     contentSecurityPolicy: false,
   })
 );
-
-/* =========================================================
-   🌐 CORS CONFIG (ROBUSTO)
-========================================================= */
 
 const normalize = (url) => url?.replace(/\/$/, "");
 
@@ -35,15 +36,22 @@ const ALLOWED_ORIGINS = [
   "https://globalhomegroup.com.ar",
   "https://www.globalhomegroup.com.ar",
   "https://globalhomegroup.netlify.app",
+  "https://main--globalhomegroup.netlify.app",
   process.env.FRONTEND_URL,
+  ...(process.env.CORS_ORIGINS || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean),
   "http://localhost:5173",
   "http://localhost:3001",
-].filter(Boolean).map(normalize);
+]
+  .filter(Boolean)
+  .map(normalize);
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin) return callback(null, true); // Postman / server-to-server
+      if (!origin) return callback(null, true);
 
       const normalizedOrigin = normalize(origin);
 
@@ -51,9 +59,7 @@ app.use(
         return callback(null, true);
       }
 
-      console.warn("❌ CORS bloqueado:", origin);
-
-      // 🔥 NO romper el server
+      console.warn("CORS bloqueado:", origin);
       return callback(null, false);
     },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -62,84 +68,118 @@ app.use(
   })
 );
 
-/* =========================================================
-   🧰 MIDDLEWARES
-========================================================= */
-
 app.use(express.json());
-app.use(morgan("dev")); // logs útiles en Railway
+app.use(morgan("dev"));
 
-// Debug opcional (podés comentar después)
 app.use((req, res, next) => {
-  console.log("🌐 Origin:", req.headers.origin);
+  console.log("Origin:", req.headers.origin);
   next();
 });
 
-/* =========================================================
-   🚀 ROUTES
-========================================================= */
+const getServiceStatus = () => ({
+  status: dbState.connected ? "ok" : "degraded",
+  service: "globalhomegroup-backend",
+  database: {
+    connected: dbState.connected,
+    connecting: dbState.connecting,
+    lastAttemptAt: dbState.lastAttemptAt,
+    lastConnectedAt: dbState.lastConnectedAt,
+    lastError: dbState.lastError,
+  },
+});
 
+const requireDatabaseConnection = (req, res, next) => {
+  if (dbState.connected) {
+    return next();
+  }
+
+  return res.status(503).json({
+    error: "Servicio temporalmente no disponible",
+    database: {
+      connected: false,
+      lastError: dbState.lastError,
+    },
+  });
+};
+
+app.get("/", (req, res) => {
+  res.status(200).json(getServiceStatus());
+});
+
+app.get("/healthz", (req, res) => {
+  res.status(200).json(getServiceStatus());
+});
+
+app.get("/readyz", (req, res) => {
+  res.status(dbState.connected ? 200 : 503).json(getServiceStatus());
+});
+
+app.use("/api", requireDatabaseConnection);
 app.use("/api/propiedades", propiedadRoutes);
 app.use("/api/planes", planesRoutes);
 app.use("/api/construcciones", construccionRoutes);
 
-/* =========================================================
-   ❤️ HEALTH CHECK (clave para Railway)
-========================================================= */
-
-app.get("/", (req, res) => {
-  res.status(200).json({
-    status: "ok",
-    service: "globalhomegroup-backend",
-  });
-});
-
-/* =========================================================
-   ❌ MANEJO DE ERRORES GLOBAL
-========================================================= */
-
 app.use((err, req, res, next) => {
-  console.error("🔥 ERROR GLOBAL:", err);
+  console.error("ERROR GLOBAL:", err);
 
   res.status(500).json({
     error: "Error interno del servidor",
   });
 });
 
-/* =========================================================
-   🗄️ DB + SERVER START
-========================================================= */
-
-const PORT = process.env.PORT || 3001;
-const isDevelopment = process.env.NODE_ENV === "development";
-
 const validateRequiredEnv = () => {
-  const missingVars = REQUIRED_ENV_VARS.filter((envVar) => !process.env[envVar]);
+  const missingVars = sequelize.getMissingDbEnvVars ? sequelize.getMissingDbEnvVars() : [];
 
   if (missingVars.length > 0) {
     throw new Error(`Faltan variables de entorno requeridas: ${missingVars.join(", ")}`);
   }
 };
 
-const startServer = async () => {
+const scheduleReconnect = () => {
+  setTimeout(() => {
+    connectToDatabase().catch((error) => {
+      console.error("Error inesperado al reintentar DB:", error);
+    });
+  }, DB_RETRY_DELAY_MS);
+};
+
+const connectToDatabase = async () => {
+  if (dbState.connecting || dbState.connected) {
+    return;
+  }
+
+  dbState.connecting = true;
+  dbState.lastAttemptAt = new Date().toISOString();
+
   try {
     validateRequiredEnv();
     await sequelize.authenticate();
-    console.log("🟢 DB conectada");
+    dbState.connected = true;
+    dbState.lastError = null;
+    dbState.lastConnectedAt = new Date().toISOString();
+    console.log("DB conectada");
 
-    // ⚠️ SOLO en desarrollo
     if (isDevelopment) {
       await sequelize.sync({ force: false });
-      console.log("🟡 DB sync (dev)");
+      console.log("DB sync (dev)");
     }
-
-    app.listen(PORT, () => {
-      console.log(`🚀 Server corriendo en puerto ${PORT}`);
-    });
   } catch (error) {
-    console.error("🔴 Error al iniciar servidor:", error);
-    process.exit(1);
+    dbState.connected = false;
+    dbState.lastError = error.message;
+    console.error("Error al conectar DB:", error.message);
+    scheduleReconnect();
+  } finally {
+    dbState.connecting = false;
   }
+};
+
+const startServer = () => {
+  app.listen(PORT, () => {
+    console.log(`Server corriendo en puerto ${PORT}`);
+    connectToDatabase().catch((error) => {
+      console.error("Error inesperado al iniciar DB:", error);
+    });
+  });
 };
 
 startServer();
