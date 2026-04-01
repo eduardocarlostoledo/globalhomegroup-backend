@@ -13,8 +13,11 @@ const construccionRoutes = require("./routes/construccion.routes");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const HOST = process.env.HOST || "0.0.0.0";
 const isDevelopment = process.env.NODE_ENV === "development";
 const DB_RETRY_DELAY_MS = Number.parseInt(process.env.DB_RETRY_DELAY_MS || "", 10) || 10000;
+const DB_HEALTHCHECK_INTERVAL_MS =
+  Number.parseInt(process.env.DB_HEALTHCHECK_INTERVAL_MS || "", 10) || 60000;
 const dbState = {
   connected: false,
   connecting: false,
@@ -22,6 +25,11 @@ const dbState = {
   lastAttemptAt: null,
   lastConnectedAt: null,
 };
+let server;
+let reconnectTimer = null;
+
+app.disable("x-powered-by");
+app.set("trust proxy", 1);
 
 // Helmet without CSP because CSP is handled in the frontend.
 app.use(
@@ -48,27 +56,29 @@ const ALLOWED_ORIGINS = [
   .filter(Boolean)
   .map(normalize);
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
 
-      const normalizedOrigin = normalize(origin);
+    const normalizedOrigin = normalize(origin);
 
-      if (ALLOWED_ORIGINS.includes(normalizedOrigin)) {
-        return callback(null, true);
-      }
+    if (ALLOWED_ORIGINS.includes(normalizedOrigin)) {
+      return callback(null, true);
+    }
 
-      console.warn("CORS bloqueado:", origin);
-      return callback(null, false);
-    },
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true,
-  })
-);
+    console.warn("CORS bloqueado:", origin);
+    return callback(null, false);
+  },
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
+};
 
-app.use(express.json());
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
+
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(morgan("dev"));
 
 app.use((req, res, next) => {
@@ -102,6 +112,11 @@ const requireDatabaseConnection = (req, res, next) => {
   });
 };
 
+const markDatabaseDisconnected = (reason) => {
+  dbState.connected = false;
+  dbState.lastError = reason || dbState.lastError;
+};
+
 app.get("/", (req, res) => {
   res.status(200).json(getServiceStatus());
 });
@@ -119,11 +134,18 @@ app.use("/api/propiedades", propiedadRoutes);
 app.use("/api/planes", planesRoutes);
 app.use("/api/construcciones", construccionRoutes);
 
+app.use((req, res) => {
+  res.status(404).json({
+    error: "Ruta no encontrada",
+    path: req.originalUrl,
+  });
+});
+
 app.use((err, req, res, next) => {
   console.error("ERROR GLOBAL:", err);
 
-  res.status(500).json({
-    error: "Error interno del servidor",
+  res.status(err.statusCode || err.status || 500).json({
+    error: err.expose ? err.message : "Error interno del servidor",
   });
 });
 
@@ -136,7 +158,12 @@ const validateRequiredEnv = () => {
 };
 
 const scheduleReconnect = () => {
-  setTimeout(() => {
+  if (reconnectTimer) {
+    return;
+  }
+
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
     connectToDatabase().catch((error) => {
       console.error("Error inesperado al reintentar DB:", error);
     });
@@ -157,6 +184,10 @@ const connectToDatabase = async () => {
     dbState.connected = true;
     dbState.lastError = null;
     dbState.lastConnectedAt = new Date().toISOString();
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     console.log("DB conectada");
 
     if (isDevelopment) {
@@ -173,13 +204,66 @@ const connectToDatabase = async () => {
   }
 };
 
+const startDatabaseHealthcheck = () => {
+  setInterval(async () => {
+    if (dbState.connecting) {
+      return;
+    }
+
+    try {
+      await sequelize.authenticate();
+      if (!dbState.connected) {
+        dbState.connected = true;
+        dbState.lastError = null;
+        dbState.lastConnectedAt = new Date().toISOString();
+        console.log("DB reconectada");
+      }
+    } catch (error) {
+      if (dbState.connected) {
+        console.error("DB desconectada:", error.message);
+      }
+      markDatabaseDisconnected(error.message);
+      scheduleReconnect();
+    }
+  }, DB_HEALTHCHECK_INTERVAL_MS);
+};
+
 const startServer = () => {
-  app.listen(PORT, () => {
-    console.log(`Server corriendo en puerto ${PORT}`);
+  server = app.listen(PORT, HOST, () => {
+    console.log(`Server corriendo en ${HOST}:${PORT}`);
     connectToDatabase().catch((error) => {
       console.error("Error inesperado al iniciar DB:", error);
     });
   });
+
+  server.on("error", (error) => {
+    console.error("Error del servidor HTTP:", error);
+  });
 };
 
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled Rejection:", reason);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught Exception:", error);
+});
+
+process.on("SIGTERM", () => {
+  console.log("SIGTERM recibido, cerrando servidor...");
+  server?.close(() => {
+    console.log("Servidor HTTP detenido");
+    process.exit(0);
+  });
+});
+
+process.on("SIGINT", () => {
+  console.log("SIGINT recibido, cerrando servidor...");
+  server?.close(() => {
+    console.log("Servidor HTTP detenido");
+    process.exit(0);
+  });
+});
+
 startServer();
+startDatabaseHealthcheck();
