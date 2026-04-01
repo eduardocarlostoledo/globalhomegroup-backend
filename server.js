@@ -118,7 +118,7 @@ const startServer = async () => {
 
     // ⚠️ SOLO en desarrollo
     if (process.env.NODE_ENV !== "production") {
-      await sequelize.sync({ alter: true });
+      await sequelize.sync({ force: false });
       console.log("🟡 DB sync (dev)");
     }
 
