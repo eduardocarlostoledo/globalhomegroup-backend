@@ -10,6 +10,15 @@ const sequelize = new Sequelize(
     dialect: 'postgres',
     port: process.env.DB_PORT,
     logging: false,
+    dialectOptions: {
+      connectTimeout: 10000,
+    },
+    pool: {
+      max: 5,
+      min: 0,
+      acquire: 30000,
+      idle: 10000,
+    },
   }
 );
 
