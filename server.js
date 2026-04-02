@@ -18,6 +18,7 @@ const isDevelopment = process.env.NODE_ENV === "development";
 const DB_RETRY_DELAY_MS = Number.parseInt(process.env.DB_RETRY_DELAY_MS || "", 10) || 10000;
 const DB_HEALTHCHECK_INTERVAL_MS =
   Number.parseInt(process.env.DB_HEALTHCHECK_INTERVAL_MS || "", 10) || 60000;
+
 const dbState = {
   connected: false,
   connecting: false,
@@ -25,13 +26,13 @@ const dbState = {
   lastAttemptAt: null,
   lastConnectedAt: null,
 };
-let server;
+
+let server = null;
 let reconnectTimer = null;
 
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
 
-// Helmet without CSP because CSP is handled in the frontend.
 app.use(
   helmet({
     contentSecurityPolicy: false,
@@ -80,11 +81,6 @@ app.options("*", cors(corsOptions));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(morgan("dev"));
-
-app.use((req, res, next) => {
-  console.log("Origin:", req.headers.origin);
-  next();
-});
 
 const getServiceStatus = () => ({
   status: dbState.connected ? "ok" : "degraded",
@@ -184,10 +180,12 @@ const connectToDatabase = async () => {
     dbState.connected = true;
     dbState.lastError = null;
     dbState.lastConnectedAt = new Date().toISOString();
+
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
+
     console.log("DB conectada");
 
     if (isDevelopment) {
@@ -195,8 +193,7 @@ const connectToDatabase = async () => {
       console.log("DB sync (dev)");
     }
   } catch (error) {
-    dbState.connected = false;
-    dbState.lastError = error.message;
+    markDatabaseDisconnected(error.message);
     console.error("Error al conectar DB:", error.message);
     scheduleReconnect();
   } finally {
