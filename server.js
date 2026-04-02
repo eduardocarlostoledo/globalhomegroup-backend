@@ -45,7 +45,7 @@ const ALLOWED_ORIGINS = [
   "https://globalhomegroup.com.ar",
   "https://www.globalhomegroup.com.ar",
   "https://globalhomegroup.netlify.app",
-  "https://main--globalhomegroup.netlify.app",
+  "https://helpful-grace-production-4a12.up.railway.app",
   process.env.FRONTEND_URL,
   ...(process.env.CORS_ORIGINS || "")
     .split(",")
